@@ -13,28 +13,33 @@
 namespace inflate {
 
     template <
-            class T,
-            class Alloc = std::allocator<T>,
-            class Compare = std::less<T>,
-            class Plus = std::plus<T>,
-            class OperationOperandType = T>
-
+        class T,
+        class Alloc = std::allocator<T>,
+        class Compare = std::less<T>,
+        class Plus = std::plus<T>,
+        class OperationOperandType = T>
             requires std::copyable<T>
-                    && std::same_as<T, typename Alloc::value_type>
-                    && std::is_default_constructible_v<Compare>
-                    && std::is_invocable_r_v<bool, Compare(const T&, const T&)>
-                    && std::is_invocable_r_v<T, Plus(const T&, const T&)>
-                    && std::copyable<T>
-                    && std::copyable<OperationOperandType>
+                && std::same_as<T, typename Alloc::value_type>
+                && std::is_default_constructible_v<Compare>
+                && std::is_default_constructible_v<Plus>
+                && std::is_invocable_r_v<bool, Compare(const T&, const T&)>
+                && std::is_invocable_r_v<T, Plus(const T&, const T&)>
+                && std::copyable<T>
+                && std::copyable<OperationOperandType>
+                && std::is_default_constructible_v<Alloc>
+                && requires(Alloc allocator, std::size_t size) {
+                    {allocator.allocate(size)} -> std::convertible_to<T*>;
+                }
+
     class segment_tree {
+
+    protected:
+        Alloc allocator;
     public:
         using value_type = T;
         using reference = value_type&;
         using size_type = std::size_t;
-        using difference_type = std::ptrdiff_t;
         using allocator_type = Alloc;
-        using pointer = std::allocator_traits<Alloc>::pointer;
-        using const_pointer = std::allocator_traits<Alloc>::const_pointer;
 
         struct segment_tree_node {
 
@@ -54,7 +59,7 @@ namespace inflate {
             size_type begin_pos;
             size_type end_pos;
 
-            [[nodiscard]] bool is_leaf() {
+            [[nodiscard]] bool is_leaf() noexcept {
                 return begin_pos == end_pos-1;
             }
 
@@ -78,8 +83,8 @@ namespace inflate {
 
         };
 
-
-        segment_tree();
+        // TODO: Implement constructor
+        segment_tree(auto&& begin, auto&& end);
     };
 
 } // inflate
