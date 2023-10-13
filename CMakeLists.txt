@@ -3,5 +3,7 @@ project(inflate)
 
 set(CMAKE_CXX_STANDARD 23)
 
-add_executable(inflate main.cpp
+add_library(inflate STATIC main.cpp
         ds/segment_tree.hpp)
+
+add_subdirectory(test)
