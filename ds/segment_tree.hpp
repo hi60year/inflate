@@ -18,7 +18,7 @@ namespace inflate {
 
         struct segment_tree_node_tag {
             OperationOperandType val;
-            std::function<bool(T, OperationOperandType)> operation;
+            std::function<T(const T&, const OperationOperandType&)> operation;
         };
 
         std::optional<segment_tree_node_tag> _tag;
@@ -35,7 +35,7 @@ namespace inflate {
             return begin_pos == end_pos-1;
         }
 
-        template<class Call> requires std::copyable<Call> && std::is_invocable_r_v<T, Call(T, OperationOperandType)>
+        template<class Call> requires std::copyable<Call> && std::is_invocable_r_v<T, Call, const T&, const OperationOperandType&>
         void set_tag(OperationOperandType opr, Call operation) {
             _tag = segment_tree_node_tag {opr, operation};
         }
@@ -160,6 +160,68 @@ namespace inflate {
                 allocator.deallocate(root, allocation_size());
             }
         }
+
+    private:
+        template<class Op>
+        void _apply_op(node_type& node, const Op& operation, const OperationOperandType& val) {
+
+            for (size_type i = node.begin_pos; i != node.end_pos; i++) {
+                node.sum = std::invoke(operation, node.sum, val);
+            }
+
+            node.max = std::invoke(operation, node.max, val);
+            node.min = std::invoke(operation, node.min, val);
+        }
+    public:
+
+        void push_down_tag(size_type pos) {
+
+            auto& node = root[pos - 1];
+
+            if (not node._tag.has_value()) {
+                return;
+            }
+
+            const auto& tag = node._tag.value();
+
+            if (not node.is_leaf()) {
+                push_down_tag(pos * 2);
+                push_down_tag(pos * 2 + 1);
+                _apply_op(root[pos * 2 - 1], tag.operation, tag.val);
+                _apply_op(root[pos * 2], tag.operation, tag.val);
+                root[pos * 2 - 1]._tag = tag;
+                root[pos * 2]._tag = tag;
+            }
+
+            node._tag.reset();
+        }
+
+    private:
+
+        template<class Op>
+        void _update(size_type pos, size_type begin, size_type end, const Op& operation, const OperationOperandType& val) {
+            push_down_tag(pos);
+            auto& node = root[pos - 1];
+            if (node.begin_pos < begin) {
+                _update(pos * 2 + 1, begin, end, operation, val);
+            }
+            if (node.end_pos > end) {
+                _update(pos * 2, begin, end, operation, val);
+            } else if (node.begin_pos >= begin) {
+                _apply_op(node, operation, val);
+                node.set_tag(val, operation);
+                return;
+            }
+
+            node = generate_parent(root[pos * 2 - 1], root[pos * 2]);
+
+        }
+
+    public:
+        template<class Op>
+        void update(size_type begin, size_type end, const Op& operation, const OperationOperandType& val) {
+            _update(1, begin, end, operation, val);
+        }
     };
 
     template<class T, class Compare, class Plus, class OperationOperandType, class Alloc>
@@ -175,7 +237,6 @@ namespace inflate {
             begin = buildTree(pos * 2, l, mid, begin, end);
             begin = buildTree(pos * 2 + 1, mid, r, begin, end);
 
-            // TODO: complete tree build process.
             std::construct_at(root + pos - 1, generate_parent(root[pos * 2 - 1], root[pos * 2]));
 
             return begin;
