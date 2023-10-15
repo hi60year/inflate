@@ -18,15 +18,13 @@ namespace inflate {
 
         struct segment_tree_node_tag {
             OperationOperandType val;
-            std::function<T(const T&, const OperationOperandType&)> operation;
+            std::function<T(const T&, const OperationOperandType&, size_t begin_pos, size_t end_pos)> operation;
         };
 
         std::optional<segment_tree_node_tag> _tag;
 
         using size_type = std::size_t;
 
-        T max;
-        T min;
         T sum;
         size_type begin_pos;
         size_type end_pos;
@@ -35,7 +33,7 @@ namespace inflate {
             return begin_pos == end_pos-1;
         }
 
-        template<class Call> requires std::copyable<Call> && std::is_invocable_r_v<T, Call, const T&, const OperationOperandType&>
+        template<class Call> requires std::copyable<Call> && std::is_invocable_r_v<T, Call, const T&, const OperationOperandType&, size_t, size_t>
         void set_tag(OperationOperandType opr, Call operation) {
             _tag = segment_tree_node_tag {opr, operation};
         }
@@ -47,37 +45,27 @@ namespace inflate {
         // construct leaf node
         segment_tree_node(const T& val, size_type pos):
                 _tag(),
-                max(val),
-                min(val),
                 sum(val),
                 begin_pos(pos),
                 end_pos(pos + 1) {}
 
-        segment_tree_node(const T& _max, const T& _min, const T& _sum, size_type _begin_pos, size_type _end_pos) :
+        segment_tree_node(const T& _sum, size_type _begin_pos, size_type _end_pos) :
             _tag(),
-            min(_min),
-            max(_max),
             sum(_sum),
             begin_pos(_begin_pos),
             end_pos(_end_pos) {}
-
-
-
     };
 
 
     template <
             class T,
-            class Compare = std::less<T>,
             class Plus = std::plus<T>,
             class OperationOperandType = T,
             class Alloc = std::allocator<segment_tree_node<T, OperationOperandType>>
                     >
     concept linear_segment_tree_requirement = std::copyable<T>
                                               && std::same_as<segment_tree_node<T, OperationOperandType>, typename Alloc::value_type>
-                                              && std::is_default_constructible_v<Compare>
                                               && std::is_default_constructible_v<Plus>
-                                              && std::is_invocable_r_v<bool, Compare, const T&, const T&>
                                               && std::is_invocable_r_v<T, Plus, const T&, const T&>
                                               && std::copyable<T>
                                               && std::copyable<OperationOperandType>
@@ -88,12 +76,11 @@ namespace inflate {
 
     template <
             class T,
-            class Compare = std::less<T>,
             class Plus = std::plus<T>,
             class OperationOperandType = T,
             class Alloc = std::allocator<segment_tree_node<T, OperationOperandType>>
                     >
-            requires linear_segment_tree_requirement<T, Compare, Plus, OperationOperandType, Alloc>
+            requires linear_segment_tree_requirement<T, Plus, OperationOperandType, Alloc>
 
     class linear_segment_tree {
     public:
@@ -110,14 +97,21 @@ namespace inflate {
         template<std::input_iterator Iter>
         Iter buildTree(size_type pos, size_type l, size_type r, Iter begin, Iter end);
 
-        static constexpr node_type generate_parent(const node_type& l_child, const node_type& r_child, Compare compare = Compare(), Plus plus = Plus()) noexcept {
+        static constexpr node_type generate_parent(const node_type& l_child, const node_type& r_child, Plus plus = Plus()) noexcept {
             return node_type (
-                    std::invoke(compare, l_child.max, r_child.max) ? r_child.max : l_child.max,
-                    std::invoke(compare, l_child.min, r_child.min) ? l_child.min : r_child.min,
                     std::invoke(plus, l_child.sum, r_child.sum),
                     l_child.begin_pos,
                     r_child.end_pos
             );
+        }
+
+        void destroy_tree(size_type pos = 1) noexcept {
+            auto& node = root[pos - 1];
+            if (not node.is_leaf()) {
+                destroy_tree(pos * 2);
+                destroy_tree(pos * 2 + 1);
+            }
+            std::destroy_at(root + pos - 1);
         }
 
     public:
@@ -155,7 +149,8 @@ namespace inflate {
             std::uninitialized_copy_n(other.root, other.allocation_size(), root);
         }
 
-        constexpr ~linear_segment_tree() {
+        constexpr ~linear_segment_tree() noexcept {
+            destroy_tree();
             if (this -> _size != 0) {
                 allocator.deallocate(root, allocation_size());
             }
@@ -164,13 +159,7 @@ namespace inflate {
     private:
         template<class Op>
         void _apply_op(node_type& node, const Op& operation, const OperationOperandType& val) {
-
-            for (size_type i = node.begin_pos; i != node.end_pos; i++) {
-                node.sum = std::invoke(operation, node.sum, val);
-            }
-
-            node.max = std::invoke(operation, node.max, val);
-            node.min = std::invoke(operation, node.min, val);
+            node.sum = std::invoke(operation, node.sum, val, node.begin_pos, node.end_pos);
         }
     public:
 
@@ -202,19 +191,39 @@ namespace inflate {
         void _update(size_type pos, size_type begin, size_type end, const Op& operation, const OperationOperandType& val) {
             push_down_tag(pos);
             auto& node = root[pos - 1];
-            if (node.begin_pos < begin) {
-                _update(pos * 2 + 1, begin, end, operation, val);
-            }
-            if (node.end_pos > end) {
-                _update(pos * 2, begin, end, operation, val);
-            } else if (node.begin_pos >= begin) {
+
+            if (node.begin_pos >= begin && node.end_pos <= end) {
                 _apply_op(node, operation, val);
                 node.set_tag(val, operation);
                 return;
+            } else if (size_type mid = std::midpoint(node.begin_pos, node.end_pos); mid <= begin) {
+                _update(pos * 2 + 1, begin, end, operation, val);
+            } else if (mid >= end) {
+                _update(pos * 2, begin, end, operation, val);
+            } else {
+                _update(pos * 2, begin, end, operation, val);
+                _update(pos * 2 + 1, begin, end, operation, val);
             }
 
             node = generate_parent(root[pos * 2 - 1], root[pos * 2]);
 
+        }
+
+        T _query(size_type pos, size_type begin_pos, size_type end_pos, const Plus& plus = Plus()) {
+            push_down_tag(pos);
+            auto& node = root[pos - 1];
+
+            if (node.begin_pos >= begin_pos && node.end_pos <= end_pos) {
+                return node.sum;
+            } else if (size_type mid = std::midpoint(node.begin_pos, node.end_pos); mid <= begin_pos) {
+                return _query(pos * 2 + 1, begin_pos, end_pos, plus);
+            } else if (mid >= end_pos) {
+                return _query(pos * 2, begin_pos, end_pos, plus);
+            } else {
+                return std::invoke(plus,
+                                   _query(pos * 2, begin_pos, end_pos, plus),
+                                   _query(pos * 2 + 1, begin_pos, end_pos, plus));
+            }
         }
 
     public:
@@ -222,12 +231,16 @@ namespace inflate {
         void update(size_type begin, size_type end, const Op& operation, const OperationOperandType& val) {
             _update(1, begin, end, operation, val);
         }
+
+        T query(size_type begin_pos, size_type end_pos, const Plus& plus = Plus()) {
+            return _query(1, begin_pos, end_pos, plus);
+        }
     };
 
-    template<class T, class Compare, class Plus, class OperationOperandType, class Alloc>
-    requires linear_segment_tree_requirement<T, Compare, Plus, OperationOperandType, Alloc>
+    template<class T, class Plus, class OperationOperandType, class Alloc>
+    requires linear_segment_tree_requirement<T, Plus, OperationOperandType, Alloc>
     template<std::input_iterator Iter>
-    Iter linear_segment_tree<T, Compare, Plus, OperationOperandType, Alloc>
+    Iter linear_segment_tree<T, Plus, OperationOperandType, Alloc>
             ::buildTree(size_type pos, size_type l, size_type r, Iter begin, Iter end) {
         if (l == r - 1) {
             std::construct_at(root + pos - 1, *begin++, l);
